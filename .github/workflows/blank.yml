@@ -1,6 +1,8 @@
 name: Ajax AI Monitor
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -22,39 +24,93 @@ jobs:
           import feedparser
           import requests
           import os
+          from datetime import datetime, timezone
 
-          feed_url = "https://www.voetbalprimeur.nl/feed/news.xml?tag=ajax"
+          FEED_URL = "https://www.voetbalprimeur.nl/feed/news.xml?tag=ajax"
+          SOURCE_ID = 2
 
-          feed = feedparser.parse(feed_url)
+          supabase_url = os.environ["SUPABASE_URL"]
+          supabase_key = os.environ["SUPABASE_KEY"]
 
-          print(f"🔴⚪ Gevonden artikelen: {len(feed.entries)}")
+          headers = {
+              "apikey": supabase_key,
+              "Authorization": f"Bearer {supabase_key}",
+              "Content-Type": "application/json"
+          }
 
-          for entry in feed.entries[:10]:
-              title = entry.get("title", "")
-              url = entry.get("link", "")
-              description = entry.get("summary", "")
+          print("🔴⚪ Ajax AI Monitor gestart")
+          print("🔎 VoetbalPrimeur controleren...")
 
-              print("")
-              print("📰", title)
-              print("🔗", url)
+          feed = feedparser.parse(FEED_URL)
 
-              data = {
-                  "source_id": 2,
+          print(f"📰 {len(feed.entries)} artikelen gevonden")
+
+          new_articles = 0
+          skipped_articles = 0
+
+          for entry in feed.entries:
+
+              title = entry.get("title", "").strip()
+              url = entry.get("link", "").strip()
+              description = entry.get("summary", "").strip()
+
+              if not title or not url:
+                  continue
+
+              # Controleer of artikel al bestaat
+              check = requests.get(
+                  f"{supabase_url}/rest/v1/articles",
+                  headers=headers,
+                  params={
+                      "select": "id",
+                      "url": f"eq.{url}"
+                  }
+              )
+
+              if check.status_code != 200:
+                  print("⚠️ Controle mislukt:", check.status_code)
+                  continue
+
+              if check.json():
+                  skipped_articles += 1
+                  continue
+
+              # Publicatiedatum proberen te lezen
+              published_at = None
+
+              if hasattr(entry, "published_parsed") and entry.published_parsed:
+                  dt = datetime(
+                      *entry.published_parsed[:6],
+                      tzinfo=timezone.utc
+                  )
+                  published_at = dt.isoformat()
+
+              article = {
+                  "source_id": SOURCE_ID,
                   "title": title,
                   "url": url,
-                  "description": description
+                  "description": description,
+                  "published_at": published_at,
+                  "category": "ajax"
               }
 
               response = requests.post(
-                  f"{os.environ['SUPABASE_URL']}/rest/v1/articles",
-                  headers={
-                      "apikey": os.environ["SUPABASE_KEY"],
-                      "Authorization": f"Bearer {os.environ['SUPABASE_KEY']}",
-                      "Content-Type": "application/json",
-                      "Prefer": "resolution=ignore-duplicates"
-                  },
-                  json=data
+                  f"{supabase_url}/rest/v1/articles",
+                  headers=headers,
+                  json=article
               )
 
-              print("Database:", response.status_code)
+              if response.status_code in (200, 201):
+                  new_articles += 1
+                  print("✅ Nieuw:", title)
+              else:
+                  print("❌ Opslaan mislukt:", response.status_code)
+                  print(response.text)
+
+          print("")
+          print("━━━━━━━━━━━━━━━━━━━━")
+          print(f"🆕 Nieuwe artikelen: {new_articles}")
+          print(f"⏭️ Al bekend: {skipped_articles}")
+          print("━━━━━━━━━━━━━━━━━━━━")
+          print("🔴⚪ Monitor klaar")
           PY
