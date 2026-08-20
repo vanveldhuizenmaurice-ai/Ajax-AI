@@ -16,7 +16,7 @@ jobs:
       - name: Fetch VoetbalPrimeur Ajax news
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SECRET }}
         run: |
           python - <<'PY'
           import feedparser
