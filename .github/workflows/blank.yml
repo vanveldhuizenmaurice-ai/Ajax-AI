@@ -15,7 +15,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install feedparser requests
 
-      - name: Fetch all RSS sources
+      - name: Check RSS sources and fetch news
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SECRET }}
@@ -35,9 +35,10 @@ jobs:
               "Content-Type": "application/json"
           }
 
-          print("🔴⚪ Ajax AI Monitor gestart")
+          print("🔴⚪ AJAX AI MONITOR")
+          print("")
 
-          # Haal alle RSS-bronnen uit Supabase
+          # Get all RSS sources
           response = requests.get(
               f"{SUPABASE_URL}/rest/v1/sources",
               headers=HEADERS,
@@ -55,33 +56,51 @@ jobs:
           sources = response.json()
 
           print(f"📡 RSS-bronnen gevonden: {len(sources)}")
+          print("")
 
           total_new = 0
+          working = 0
+          broken = 0
 
           for source in sources:
 
               source_id = source["id"]
               source_name = source["name"]
-              feed_url = source["feed_url"]
+              feed_url = source.get("feed_url")
+
+              print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+              print(f"🔎 {source_name}")
 
               if not feed_url:
-                  print(f"⚠️ {source_name}: geen feed URL, overgeslagen")
+                  print("🔴 GEEN FEED URL")
+                  broken += 1
                   continue
 
-              print("")
-              print("━━━━━━━━━━━━━━━━━━━━")
-              print(f"🔎 {source_name}")
               print(f"🔗 {feed_url}")
-              print("━━━━━━━━━━━━━━━━━━━━")
 
               try:
                   feed = feedparser.parse(feed_url)
+
+                  article_count = len(feed.entries)
+
+                  # Controleer of de feed daadwerkelijk bruikbaar is
+                  if feed.bozo and article_count == 0:
+                      print("🔴 FEED FOUT")
+                      broken += 1
+                      continue
+
+                  if article_count == 0:
+                      print("🟡 GEEN ARTIKELEN")
+                  else:
+                      print(f"🟢 FEED OK — {article_count} artikelen")
+                      working += 1
+
               except Exception as error:
-                  print(f"❌ Feed-fout: {error}")
+                  print(f"🔴 FOUT — {error}")
+                  broken += 1
                   continue
 
-              print(f"📰 Artikelen gevonden: {len(feed.entries)}")
-
+              # Artikelen verwerken
               new_articles = 0
               existing_articles = 0
 
@@ -94,7 +113,7 @@ jobs:
                   if not title or not url:
                       continue
 
-                  # Controleer of artikel al bestaat
+                  # Check duplicate
                   check = requests.get(
                       f"{SUPABASE_URL}/rest/v1/articles",
                       headers=HEADERS,
@@ -105,7 +124,10 @@ jobs:
                   )
 
                   if check.status_code != 200:
-                      print("⚠️ Artikelcontrole mislukt:", check.status_code)
+                      print(
+                          f"⚠️ Artikelcontrole mislukt: "
+                          f"{check.status_code}"
+                      )
                       continue
 
                   if check.json():
@@ -114,7 +136,10 @@ jobs:
 
                   published_at = None
 
-                  if hasattr(entry, "published_parsed") and entry.published_parsed:
+                  if (
+                      hasattr(entry, "published_parsed")
+                      and entry.published_parsed
+                  ):
                       dt = datetime(
                           *entry.published_parsed[:6],
                           tzinfo=timezone.utc
@@ -139,20 +164,21 @@ jobs:
                   if insert.status_code in (200, 201):
                       new_articles += 1
                       total_new += 1
-                      print("✅ Nieuw:", title)
-
                   else:
                       print(
-                          f"❌ Opslaan mislukt ({insert.status_code}):",
-                          insert.text
+                          f"❌ Opslaan mislukt: "
+                          f"{insert.status_code}"
                       )
 
               print(f"🆕 Nieuw: {new_articles}")
               print(f"⏭️ Al bekend: {existing_articles}")
 
           print("")
-          print("━━━━━━━━━━━━━━━━━━━━")
-          print(f"📰 Totaal nieuwe artikelen: {total_new}")
-          print("🔴⚪ Ajax AI Monitor klaar")
-          print("━━━━━━━━━━━━━━━━━━━━")
+          print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+          print("📊 BRONCONTROLE")
+          print(f"🟢 Werkende feeds: {working}")
+          print(f"🔴 Problemen: {broken}")
+          print(f"📰 Nieuwe artikelen: {total_new}")
+          print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+          print("🔴⚪ Monitor klaar")
           PY
