@@ -15,7 +15,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install feedparser requests
 
-      - name: Check RSS sources and fetch news
+      - name: Fetch and filter Ajax news
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SECRET }}
@@ -24,6 +24,7 @@ jobs:
           import feedparser
           import requests
           import os
+          import re
           from datetime import datetime, timezone
 
           SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -36,9 +37,10 @@ jobs:
           }
 
           print("🔴⚪ AJAX AI MONITOR")
+          print("🔎 Ajax-relevantie filter actief")
           print("")
 
-          # Get all RSS sources
+          # Haal alle RSS-bronnen op
           response = requests.get(
               f"{SUPABASE_URL}/rest/v1/sources",
               headers=HEADERS,
@@ -59,8 +61,33 @@ jobs:
           print("")
 
           total_new = 0
-          working = 0
-          broken = 0
+          filtered_out = 0
+
+          # Woorden/termen die sterk op Ajax wijzen
+          ajax_terms = [
+              "ajax",
+              "afc ajax",
+              "ajax amsterdam",
+              "jong ajax",
+              "de godenzonen",
+              "amsterdamse club",
+              "amsterdamse ploeg",
+              "amsterdammers",
+              "johan cruijff arena",
+              "cruijff arena"
+          ]
+
+          def is_ajax_article(title, description):
+              text = f"{title} {description}".lower()
+
+              # Normaliseer spaties
+              text = re.sub(r"\s+", " ", text)
+
+              for term in ajax_terms:
+                  if term in text:
+                      return True
+
+              return False
 
           for source in sources:
 
@@ -68,40 +95,22 @@ jobs:
               source_name = source["name"]
               feed_url = source.get("feed_url")
 
+              if not feed_url:
+                  continue
+
               print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
               print(f"🔎 {source_name}")
 
-              if not feed_url:
-                  print("🔴 GEEN FEED URL")
-                  broken += 1
-                  continue
-
-              print(f"🔗 {feed_url}")
-
               try:
                   feed = feedparser.parse(feed_url)
-
-                  article_count = len(feed.entries)
-
-                  # Controleer of de feed daadwerkelijk bruikbaar is
-                  if feed.bozo and article_count == 0:
-                      print("🔴 FEED FOUT")
-                      broken += 1
-                      continue
-
-                  if article_count == 0:
-                      print("🟡 GEEN ARTIKELEN")
-                  else:
-                      print(f"🟢 FEED OK — {article_count} artikelen")
-                      working += 1
-
               except Exception as error:
-                  print(f"🔴 FOUT — {error}")
-                  broken += 1
+                  print(f"🔴 Feed-fout: {error}")
                   continue
 
-              # Artikelen verwerken
+              print(f"📰 Artikelen gevonden: {len(feed.entries)}")
+
               new_articles = 0
+              filtered_articles = 0
               existing_articles = 0
 
               for entry in feed.entries:
@@ -113,7 +122,13 @@ jobs:
                   if not title or not url:
                       continue
 
-                  # Check duplicate
+                  # AJAX FILTER
+                  if not is_ajax_article(title, description):
+                      filtered_articles += 1
+                      filtered_out += 1
+                      continue
+
+                  # Controleer dubbele URL
                   check = requests.get(
                       f"{SUPABASE_URL}/rest/v1/articles",
                       headers=HEADERS,
@@ -152,7 +167,8 @@ jobs:
                       "url": url,
                       "description": description,
                       "published_at": published_at,
-                      "category": "ajax"
+                      "category": "ajax",
+                      "is_ajax": True
                   }
 
                   insert = requests.post(
@@ -164,21 +180,23 @@ jobs:
                   if insert.status_code in (200, 201):
                       new_articles += 1
                       total_new += 1
+                      print("🟢 AJAX:", title)
+
                   else:
                       print(
                           f"❌ Opslaan mislukt: "
                           f"{insert.status_code}"
                       )
 
-              print(f"🆕 Nieuw: {new_articles}")
+              print(f"🆕 Nieuwe Ajax-artikelen: {new_articles}")
               print(f"⏭️ Al bekend: {existing_articles}")
+              print(f"🚫 Niet Ajax: {filtered_articles}")
 
           print("")
           print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-          print("📊 BRONCONTROLE")
-          print(f"🟢 Werkende feeds: {working}")
-          print(f"🔴 Problemen: {broken}")
-          print(f"📰 Nieuwe artikelen: {total_new}")
+          print("📊 AJAX FILTER RESULTAAT")
+          print(f"📰 Nieuwe Ajax-artikelen: {total_new}")
+          print(f"🚫 Gefilterde artikelen: {filtered_out}")
           print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
           print("🔴⚪ Monitor klaar")
           PY
