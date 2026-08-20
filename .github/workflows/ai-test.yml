@@ -1,0 +1,156 @@
+name: Ajax AI Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  analyze-one:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install requests
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Analyze one Ajax article
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python - <<'PY'
+          import requests
+          import os
+          import json
+
+          SUPABASE_URL = os.environ["SUPABASE_URL"]
+          SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+          OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+
+          SUPABASE_HEADERS = {
+              "apikey": SUPABASE_KEY,
+              "Authorization": f"Bearer {SUPABASE_KEY}",
+              "Content-Type": "application/json"
+          }
+
+          print("🔴⚪ Ajax AI test gestart")
+
+          # Pak één bestaand Ajax-artikel
+          response = requests.get(
+              f"{SUPABASE_URL}/rest/v1/articles",
+              headers=SUPABASE_HEADERS,
+              params={
+                  "select": "id,title,description,url",
+                  "is_ajax": "eq.true",
+                  "limit": "1"
+              }
+          )
+
+          if response.status_code != 200:
+              print("❌ Supabase fout:", response.status_code)
+              print(response.text)
+              raise SystemExit(1)
+
+          articles = response.json()
+
+          if not articles:
+              print("❌ Geen Ajax-artikel gevonden")
+              raise SystemExit(1)
+
+          article = articles[0]
+
+          print(f"📰 Artikel: {article['title']}")
+          print(f"🆔 ID: {article['id']}")
+
+          prompt = f"""
+          Analyseer dit Ajax-nieuwsartikel.
+
+          Titel:
+          {article['title']}
+
+          Beschrijving:
+          {article.get('description', '')}
+
+          Geef uitsluitend geldige JSON terug met deze velden:
+
+          {{
+            "category": "transfer|wedstrijd|blessure|contract|trainer|clubnieuws|jeugd|overig",
+            "status": "officieel|bevestigd|waarschijnlijk|gerucht|onbekend",
+            "summary": "Een korte Nederlandse samenvatting.",
+            "reliability": 0.0
+          }}
+
+          reliability moet een getal tussen 0 en 10 zijn.
+          """
+
+          OPENAI_HEADERS = {
+              "Authorization": f"Bearer {OPENAI_API_KEY}",
+              "Content-Type": "application/json"
+          }
+
+          payload = {
+              "model": "gpt-5-mini",
+              "input": prompt
+          }
+
+          ai_response = requests.post(
+              "https://api.openai.com/v1/responses",
+              headers=OPENAI_HEADERS,
+              json=payload
+          )
+
+          if ai_response.status_code != 200:
+              print("❌ OpenAI fout:", ai_response.status_code)
+              print(ai_response.text)
+              raise SystemExit(1)
+
+          data = ai_response.json()
+
+          output = data.get("output_text")
+
+          if not output:
+              print("❌ Geen AI-antwoord ontvangen")
+              print(json.dumps(data, indent=2))
+              raise SystemExit(1)
+
+          print("")
+          print("🤖 AI ANTWOORD:")
+          print(output)
+
+          try:
+              analysis = json.loads(output)
+          except json.JSONDecodeError:
+              print("❌ AI gaf geen geldige JSON terug")
+              raise SystemExit(1)
+
+          # Analyse opslaan in Supabase
+          update = {
+              "ai_analyzed": True,
+              "ai_category": analysis.get("category"),
+              "ai_status": analysis.get("status"),
+              "ai_summary": analysis.get("summary"),
+              "ai_reliability": analysis.get("reliability")
+          }
+
+          save = requests.patch(
+              f"{SUPABASE_URL}/rest/v1/articles",
+              headers={
+                  **SUPABASE_HEADERS,
+                  "Prefer": "return=minimal"
+              },
+              params={
+                  "id": f"eq.{article['id']}"
+              },
+              json=update
+          )
+
+          if save.status_code not in (200, 204):
+              print("❌ Opslaan analyse mislukt:", save.status_code)
+              print(save.text)
+              raise SystemExit(1)
+
+          print("")
+          print("✅ AI-analyse opgeslagen in Supabase!")
+          print("🔴⚪ Ajax AI test geslaagd")
+          PY
