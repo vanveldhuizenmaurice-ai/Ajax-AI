@@ -15,7 +15,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install feedparser requests
 
-      - name: Fetch Ajax news
+      - name: Fetch all RSS sources
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SECRET }}
@@ -35,33 +35,52 @@ jobs:
               "Content-Type": "application/json"
           }
 
-          SOURCES = [
-              {
-                  "id": 2,
-                  "name": "VoetbalPrimeur",
-                  "feed": "https://www.voetbalprimeur.nl/feed/news.xml?tag=ajax"
-              },
-              {
-                  "id": 3,
-                  "name": "Voetbal International",
-                  "feed": "https://www.vi.nl/feed/news.xml?tag=ajax"
+          print("🔴⚪ Ajax AI Monitor gestart")
+
+          # Haal alle RSS-bronnen uit Supabase
+          response = requests.get(
+              f"{SUPABASE_URL}/rest/v1/sources",
+              headers=HEADERS,
+              params={
+                  "select": "id,name,feed_url,source_type",
+                  "source_type": "eq.rss"
               }
-          ]
+          )
+
+          if response.status_code != 200:
+              print("❌ Sources ophalen mislukt:", response.status_code)
+              print(response.text)
+              raise SystemExit(1)
+
+          sources = response.json()
+
+          print(f"📡 RSS-bronnen gevonden: {len(sources)}")
 
           total_new = 0
 
-          print("🔴⚪ Ajax AI Monitor gestart")
+          for source in sources:
 
-          for source in SOURCES:
+              source_id = source["id"]
+              source_name = source["name"]
+              feed_url = source["feed_url"]
+
+              if not feed_url:
+                  print(f"⚠️ {source_name}: geen feed URL, overgeslagen")
+                  continue
 
               print("")
               print("━━━━━━━━━━━━━━━━━━━━")
-              print(f"🔎 {source['name']} controleren...")
+              print(f"🔎 {source_name}")
+              print(f"🔗 {feed_url}")
               print("━━━━━━━━━━━━━━━━━━━━")
 
-              feed = feedparser.parse(source["feed"])
+              try:
+                  feed = feedparser.parse(feed_url)
+              except Exception as error:
+                  print(f"❌ Feed-fout: {error}")
+                  continue
 
-              print(f"📰 {len(feed.entries)} artikelen gevonden")
+              print(f"📰 Artikelen gevonden: {len(feed.entries)}")
 
               new_articles = 0
               existing_articles = 0
@@ -75,6 +94,7 @@ jobs:
                   if not title or not url:
                       continue
 
+                  # Controleer of artikel al bestaat
                   check = requests.get(
                       f"{SUPABASE_URL}/rest/v1/articles",
                       headers=HEADERS,
@@ -85,7 +105,7 @@ jobs:
                   )
 
                   if check.status_code != 200:
-                      print("⚠️ Controle mislukt:", check.status_code)
+                      print("⚠️ Artikelcontrole mislukt:", check.status_code)
                       continue
 
                   if check.json():
@@ -102,7 +122,7 @@ jobs:
                       published_at = dt.isoformat()
 
                   article = {
-                      "source_id": source["id"],
+                      "source_id": source_id,
                       "title": title,
                       "url": url,
                       "description": description,
@@ -110,21 +130,24 @@ jobs:
                       "category": "ajax"
                   }
 
-                  response = requests.post(
+                  insert = requests.post(
                       f"{SUPABASE_URL}/rest/v1/articles",
                       headers=HEADERS,
                       json=article
                   )
 
-                  if response.status_code in (200, 201):
+                  if insert.status_code in (200, 201):
                       new_articles += 1
                       total_new += 1
                       print("✅ Nieuw:", title)
-                  else:
-                      print("❌ Opslaan mislukt:", response.status_code)
-                      print(response.text)
 
-              print(f"🆕 Nieuw van {source['name']}: {new_articles}")
+                  else:
+                      print(
+                          f"❌ Opslaan mislukt ({insert.status_code}):",
+                          insert.text
+                      )
+
+              print(f"🆕 Nieuw: {new_articles}")
               print(f"⏭️ Al bekend: {existing_articles}")
 
           print("")
