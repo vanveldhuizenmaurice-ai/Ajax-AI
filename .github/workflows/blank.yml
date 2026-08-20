@@ -15,7 +15,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install feedparser requests
 
-      - name: Fetch and filter Ajax news
+      - name: Fetch, filter and score Ajax news
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SECRET }}
@@ -37,10 +37,10 @@ jobs:
           }
 
           print("🔴⚪ AJAX AI MONITOR")
-          print("🔎 Ajax-relevantie filter actief")
+          print("🧠 Ajax-filter + score actief")
           print("")
 
-          # Haal alle RSS-bronnen op
+          # Alle RSS-bronnen ophalen
           response = requests.get(
               f"{SUPABASE_URL}/rest/v1/sources",
               headers=HEADERS,
@@ -63,31 +63,39 @@ jobs:
           total_new = 0
           filtered_out = 0
 
-          # Woorden/termen die sterk op Ajax wijzen
-          ajax_terms = [
-              "ajax",
-              "afc ajax",
-              "ajax amsterdam",
-              "jong ajax",
-              "de godenzonen",
-              "amsterdamse club",
-              "amsterdamse ploeg",
-              "amsterdammers",
-              "johan cruijff arena",
-              "cruijff arena"
-          ]
-
-          def is_ajax_article(title, description):
+          def calculate_ajax_score(title, description):
               text = f"{title} {description}".lower()
-
-              # Normaliseer spaties
               text = re.sub(r"\s+", " ", text)
 
-              for term in ajax_terms:
-                  if term in text:
-                      return True
+              score = 0
 
-              return False
+              # Zeer sterke Ajax-termen
+              if "ajax" in text:
+                  score += 3
+
+              if "afc ajax" in text:
+                  score += 1
+
+              if "jong ajax" in text:
+                  score += 1
+
+              # Ajax-specifieke context
+              strong_terms = [
+                  "johan cruijff arena",
+                  "cruijff arena",
+                  "godenzonen",
+                  "amsterdammers",
+                  "amsterdamse club",
+                  "amsterdamse ploeg"
+              ]
+
+              for term in strong_terms:
+                  if term in text:
+                      score += 1
+                      break
+
+              # Maximaal 5
+              return min(score, 5)
 
           for source in sources:
 
@@ -122,13 +130,18 @@ jobs:
                   if not title or not url:
                       continue
 
-                  # AJAX FILTER
-                  if not is_ajax_article(title, description):
+                  ajax_score = calculate_ajax_score(
+                      title,
+                      description
+                  )
+
+                  # Score lager dan 3 = niet opslaan
+                  if ajax_score < 3:
                       filtered_articles += 1
                       filtered_out += 1
                       continue
 
-                  # Controleer dubbele URL
+                  # Dubbele URL controleren
                   check = requests.get(
                       f"{SUPABASE_URL}/rest/v1/articles",
                       headers=HEADERS,
@@ -168,7 +181,8 @@ jobs:
                       "description": description,
                       "published_at": published_at,
                       "category": "ajax",
-                      "is_ajax": True
+                      "is_ajax": True,
+                      "ajax_score": ajax_score
                   }
 
                   insert = requests.post(
@@ -180,23 +194,28 @@ jobs:
                   if insert.status_code in (200, 201):
                       new_articles += 1
                       total_new += 1
-                      print("🟢 AJAX:", title)
+
+                      print(
+                          f"🟢 AJAX {ajax_score}/5:",
+                          title
+                      )
 
                   else:
                       print(
                           f"❌ Opslaan mislukt: "
                           f"{insert.status_code}"
                       )
+                      print(insert.text)
 
               print(f"🆕 Nieuwe Ajax-artikelen: {new_articles}")
               print(f"⏭️ Al bekend: {existing_articles}")
-              print(f"🚫 Niet Ajax: {filtered_articles}")
+              print(f"🚫 Gefilterd: {filtered_articles}")
 
           print("")
           print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-          print("📊 AJAX FILTER RESULTAAT")
-          print(f"📰 Nieuwe Ajax-artikelen: {total_new}")
-          print(f"🚫 Gefilterde artikelen: {filtered_out}")
+          print("📊 AJAX SCORE RESULTAAT")
+          print(f"📰 Nieuwe artikelen: {total_new}")
+          print(f"🚫 Gefilterd: {filtered_out}")
           print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
           print("🔴⚪ Monitor klaar")
           PY
